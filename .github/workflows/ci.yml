@@ -24,14 +24,11 @@ jobs:
           submodules: true
           persist-credentials: false
       - run: rustup toolchain install stable --profile minimal && rustup default stable
-      # Known failures, already failing upstream (not skipped silently):
-      #  - the two voice chat menu tests (menus.rs:8374, 8408)
-      #  - the LAN broadcast test, which needs broadcasts delivered to the
-      #    test process (not on a firewalled runner)
+      # Skipped by name, not silently: the LAN broadcast test needs
+      # broadcasts delivered to the test process, which a firewalled
+      # runner does not do.
       - run: >
           cargo test --workspace --release --no-fail-fast --
-          --skip menus::tests::voice_chat_page_and_its_button
-          --skip menus::tests::controls_have_the_voip_toggle_row
           --skip the_lan_scan_finds_a_server_by_its_network_broadcast
 
   audit:

@@ -6973,7 +6973,8 @@ fn load_ui(lib: &mut Library) -> Result<Ui, String> {
     let port = load_menu_files(&with_port, &mut |p: &str| match p {
         PORT_AUDIO_MENU_FILE => Some(port_audio_menu()),
         PORT_VOICE_MENU_FILE => Some(port_voice_menu(&devices)),
-        "ui/ingame_options.menu" => lib.text(p).map(|t| patch_voice_button(&patch_voip_bind(&patch_sound_options(&t)))),
+        // LF first: the patches insert "\n" rows, so a CRLF file would end mixed
+        "ui/ingame_options.menu" => lib.text(p).map(|t| patch_voice_button(&patch_voip_bind(&patch_sound_options(&t.replace("\r\n", "\n"))))),
         _ => lib.text(p),
     });
     let (ui, defines) = match port {
@@ -8367,7 +8368,8 @@ mod tests {
     #[test]
     fn voice_chat_page_and_its_button() {
         let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../re/source/assets");
-        let read = |p: &str| std::fs::read_to_string(repo.join(p)).ok();
+        // a Windows checkout of the submodule may have CRLF line ends
+        let read = |p: &str| std::fs::read_to_string(repo.join(p)).ok().map(|t| t.replace("\r\n", "\n"));
         let opts = read("ui/ingame_options.menu").expect("legacy ingame_options.menu");
         let patched = patch_voice_button(&patch_voip_bind(&patch_sound_options(&opts)));
         assert_eq!(patched.matches("\"s_doppler\"").count(), 1, "the copy has no cvar");
@@ -8401,7 +8403,8 @@ mod tests {
     fn controls_have_the_voip_toggle_row() {
         // the legacy menus as re/source/assets has them (data-legacy-assets.pk3)
         let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../re/source/assets");
-        let read = |p: &str| std::fs::read_to_string(repo.join(p)).ok();
+        // a Windows checkout of the submodule may have CRLF line ends
+        let read = |p: &str| std::fs::read_to_string(repo.join(p)).ok().map(|t| t.replace("\r\n", "\n"));
         let opts = read("ui/ingame_options.menu").expect("legacy ingame_options.menu");
         let patched = patch_voip_bind(&patch_sound_options(&opts));
         assert_eq!(patched.matches("\"voip_toggle\"").count(), 1);
