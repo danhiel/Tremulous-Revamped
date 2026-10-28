@@ -29,7 +29,9 @@ re/               original source, C reference harness, golden traces, evidence
 **Just play (Windows x64):** download `Tremulous-Revamped-win64.zip` from
 [Tremulous-Revamped-Release](https://github.com/MeepingsCorner/Tremulous-Revamped-Release/releases/latest),
 unzip it anywhere and run `Tremulous.exe`. For the 4K textures, also unzip
-both `tremulous-revamped-hd-textures-part*.zip` files into the same folder,
+both `tremulous-revamped-hd-textures-part*.zip` files from the
+[4K texture pack release](https://github.com/danhiel/Tremulous-Revamped/releases/tag/hd-textures-v1)
+into the same folder,
 so an `hd` folder sits next to `Tremulous.exe`.
 
 **From source:**
@@ -265,10 +267,19 @@ with MSVC from the SDK files in `third_party/fmod` and
 `third_party/steamaudio`; other builds keep Godot's audio.
 
 The 4K texture pack is too big for the repo: download both zips from the
-[4K texture pack release](https://github.com/MeepingsCorner/Tremulous-Revamped/releases/tag/hd-textures-v1)
+[4K texture pack release](https://github.com/danhiel/Tremulous-Revamped/releases/tag/hd-textures-v1)
 and unzip them into one `hd` folder, next to the game's executable or in the
 game's user folder
-(`%APPDATA%\Godot\app_userdata\Tremulous (Godot + Rust port)\hd`). The pack
+(`%APPDATA%\Godot\app_userdata\Tremulous (Godot + Rust port)\hd`). Check the
+downloads before unzipping (`Get-FileHash <zip>` in PowerShell,
+`sha256sum <zip>` elsewhere):
+
+```
+a3fbfbadfcf345d554879fc4f89ad6ea56e10a07bede24186ca85a4f71825873  tremulous-revamped-hd-textures-part1of2.zip
+3ca05e530b89f9b901c3044d1de200a446b86d67a4847ce6291a7e3cf89f8fbf  tremulous-revamped-hd-textures-part2of2.zip
+```
+
+The pack
 is stored losslessly compressed (dec055, `crates/trem_hdpack`): each mip
 level is zstd-compressed and identical textures are links, so the GPU gets
 exactly the same data. Shrink a pack built before that (or check one) with:
