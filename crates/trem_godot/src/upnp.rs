@@ -12,6 +12,9 @@ use std::io::{Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpStream, ToSocketAddrs, UdpSocket};
 use std::time::{Duration, Instant};
 
+/// The most bytes read of one HTTP answer.
+const MAX_HTTP_ANSWER: u64 = 1 << 20;
+
 /// A port the router forwards to this PC.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Mapping {
@@ -85,8 +88,10 @@ fn http(url: &str, method: &str, headers: &[(&str, String)], body: &str) -> Resu
     req.push_str("\r\n");
     req.push_str(body);
     s.write_all(req.as_bytes()).map_err(|e| e.to_string())?;
+    // a gateway's description / SOAP answer is a few KB; any LAN device can
+    // answer the discovery, so do not read without end
     let mut raw = Vec::new();
-    let _ = s.read_to_end(&mut raw);
+    let _ = s.take(MAX_HTTP_ANSWER).read_to_end(&mut raw);
     let text = String::from_utf8_lossy(&raw).to_string();
     let (head, body) = text.split_once("\r\n\r\n").ok_or("bad HTTP answer")?;
     let status: u32 = head.split_whitespace().nth(1).and_then(|c| c.parse().ok()).ok_or("bad HTTP status")?;
@@ -98,11 +103,14 @@ fn dechunk(mut b: &str) -> String {
     let mut out = String::new();
     while let Some((size, rest)) = b.split_once("\r\n") {
         let n = usize::from_str_radix(size.trim().split(';').next().unwrap_or(""), 16).unwrap_or(0);
-        if n == 0 || rest.len() < n {
+        // `get`: a size from the network may end inside a character (the
+        // body went through from_utf8_lossy), where slicing would panic
+        let (Some(chunk), Some(next)) = (rest.get(..n), rest.get(n..)) else { break };
+        if n == 0 {
             break;
         }
-        out.push_str(&rest[..n]);
-        b = rest[n..].trim_start_matches("\r\n");
+        out.push_str(chunk);
+        b = next.trim_start_matches("\r\n");
     }
     out
 }
@@ -236,6 +244,15 @@ mod tests {
     use super::*;
     use std::net::TcpListener;
     use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn dechunk_survives_hostile_sizes() {
+        assert_eq!(dechunk("5\r\nhello\r\n6\r\n world\r\n0\r\n\r\n"), "hello world");
+        // a size ending inside the 3-byte U+FFFD that from_utf8_lossy makes
+        assert_eq!(dechunk("2\r\n\u{fffd}abc\r\n0\r\n"), "");
+        assert_eq!(dechunk("ffffffffffffffff\r\nab\r\n"), "");
+        assert_eq!(dechunk("zz\r\nab\r\n"), "");
+    }
 
     const DESC: &str = r#"<?xml version="1.0"?><root><device><deviceList><device><serviceList>
 <service><serviceType>urn:schemas-upnp-org:service:WANCommonInterfaceConfig:1</serviceType><controlURL>/ctl/CmnIfCfg</controlURL></service>
