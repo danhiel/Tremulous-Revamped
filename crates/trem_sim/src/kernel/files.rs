@@ -299,8 +299,14 @@ impl Pak {
 }
 
 /// `FS_CheckDirTraversal`.
+///
+/// The C's test (a "../" or "..\\" inside) was enough for its string
+/// concatenation, but `Path::join` replaces the base with an absolute
+/// path, so a server's `C:/...`, `/...` or `\\host\share\...` pak name
+/// would be written there (or opened over SMB). Anything but a relative
+/// path that stays below its base counts as traversal.
 pub fn check_dir_traversal(checkdir: &str) -> bool {
-    checkdir.contains("../") || checkdir.contains("..\\")
+    checkdir.starts_with(['/', '\\']) || checkdir.contains([':', '\0']) || checkdir.split(['/', '\\']).any(|c| c == "..")
 }
 
 /// `FS_IsExt` list of FS_FOpenFileRead: files that do not reference a pak.
@@ -713,6 +719,20 @@ mod tests {
         assert_eq!(s.referenced_pak_pure_checksums(), want);
         // names are game/basename, references include both
         assert_eq!(s.referenced_pak_names(), "base/map base/data");
+    }
+
+    #[test]
+    fn dir_traversal_refuses_absolute_drive_and_unc_names() {
+        for bad in ["../evil", "base/../../evil", "..\\evil", "base\\..\\x", "..", "/etc/evil", "\\evil", "C:/Users/x/evil", "c:evil", "\\\\host\\share\\evil", "//host/share/evil", "base/x\0"] {
+            assert!(check_dir_traversal(bad), "{bad:?}");
+        }
+        for ok in ["base/map-atcs-1.1.0", "base/vms-1.1.0", "models/players/human_base/head.md3", "a..b/c", "base"] {
+            assert!(!check_dir_traversal(ok), "{ok:?}");
+        }
+        // the download list never names one of them
+        let mut s = PakSet::default();
+        s.pure_server_set_referenced_paks("1 2 3 4", "C:/Users/x/evil \\\\host\\share\\evil /tmp/evil base/map-x");
+        assert_eq!(s.compare_paks(true, &|_| false).as_deref(), Some("@base/map-x.pk3@base/map-x.pk3"));
     }
 
     #[test]
