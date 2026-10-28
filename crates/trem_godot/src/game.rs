@@ -1615,6 +1615,7 @@ impl TremGame {
             Ok(b) => b,
             Err(e) => return format!("{name}: {e}"),
         };
+        crate::hdtex::new_map();
         // CS_MESSAGE: the worldspawn "message" (SP_worldspawn)
         let message = bsp.entity_list().first().and_then(|e| e.get("message").cloned()).unwrap_or_default();
         let cvar = |n: &str, d: &str| self.cvars.iter().find(|(k_, _)| k_.eq_ignore_ascii_case(n)).map(|(_, v)| v.clone()).unwrap_or_else(|| d.to_string());
@@ -4580,6 +4581,7 @@ impl TremGame {
     /// `CL_InitCGame` for a server's map: load its view World (with the
     /// loading screen), or the sheet map at once.
     fn begin_client_load(&mut self, map: &str) {
+        crate::hdtex::new_map();
         let paths = self.client_load_paths(); // wt-a (dec037): a pure server's paks
         let mut set = crate::assets::Pk3Set::open(&paths);
         let data = set.read(&format!("maps/{map}.bsp"));

@@ -120,12 +120,15 @@ pub struct HdTex {
 pub struct HdStore {
     root: PathBuf,
     max_size: usize,
-    cache: HashMap<String, Option<HdTex>>,
+    /// each key's texture and the map (`map_gen`) that last asked for it
+    cache: HashMap<String, (Option<HdTex>, u32)>,
+    map_gen: u32,
 }
 
 impl HdStore {
     pub fn get(&mut self, key: &str) -> Option<HdTex> {
-        if let Some(t) = self.cache.get(key) {
+        if let Some((t, g)) = self.cache.get_mut(key) {
+            *g = self.map_gen;
             return t.clone();
         }
         let t = read(&self.root, &format!("{key}.hdtex"), self.max_size).and_then(|(img, mean)| {
@@ -133,8 +136,31 @@ impl HdStore {
             let normal = read(&self.root, &format!("{key}.hdnrm"), self.max_size).and_then(|(n, _)| ImageTexture::create_from_image(&n));
             Some(HdTex { albedo, normal, mean })
         });
-        self.cache.insert(key.to_string(), t.clone());
+        self.cache.insert(key.to_string(), (t.clone(), self.map_gen));
         t
+    }
+
+    /// A map starts loading: a texture the last map did not ask for, and
+    /// that only this cache still holds, goes (its VRAM is freed). Without
+    /// this every map visited stayed loaded. One still held elsewhere (the
+    /// session's model cache, or a scene not freed yet) stays, so a later
+    /// `get` cannot load a second copy of it. (kept, dropped)
+    fn new_map(&mut self) -> (usize, usize) {
+        let before = self.cache.len();
+        let gen = self.map_gen;
+        let in_use = |t: &Option<HdTex>| t.as_ref().is_some_and(|h| h.albedo.get_reference_count() > 1 || h.normal.as_ref().is_some_and(|n| n.get_reference_count() > 1));
+        self.cache.retain(|_, (t, g)| *g == gen || in_use(t));
+        self.map_gen = gen.wrapping_add(1);
+        (self.cache.len(), before - self.cache.len())
+    }
+}
+
+/// A map starts loading (game.rs begin_load / begin_client_load).
+pub fn new_map() {
+    let r = STORE.with(|s| s.borrow_mut().as_mut().map(|h| h.new_map()));
+    if let (Some((kept, dropped)), true) = (r, std::env::var_os("TREM_HD_DEBUG").is_some()) {
+        let vram = godot::classes::RenderingServer::singleton().get_rendering_info(godot::classes::rendering_server::RenderingInfo::TEXTURE_MEM_USED);
+        godot_print!("trem: 4K pack: {kept} textures kept from the last map, {dropped} dropped; texture VRAM before the load {} MB", vram / (1 << 20));
     }
 }
 
@@ -166,7 +192,7 @@ pub fn configure(enabled: bool, root: &str, max_size: usize) {
         if !enabled || !root.is_dir() {
             *s = None;
         } else if !same {
-            *s = Some(HdStore { root, max_size: max_size.clamp(64, 8192), cache: HashMap::new() });
+            *s = Some(HdStore { root, max_size: max_size.clamp(64, 8192), cache: HashMap::new(), map_gen: 0 });
         }
     });
 }
