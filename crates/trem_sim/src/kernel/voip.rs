@@ -173,7 +173,7 @@ impl Server {
         let recips = m.read_data(VOIP_TARGET_BYTES);
         let mut flags = m.read_byte();
         let packetsize = m.read_short();
-        if m.readcount > m.cursize {
+        if m.readcount > m.cursize || packetsize < 0 {
             return; // short/invalid packet, bail.
         }
         if packetsize as usize > VOIP_SERVER_DATA {
@@ -910,5 +910,33 @@ mod tests {
         assert!(v.has_voip);
         v.userinfo_changed("\\name\\a");
         assert!(!v.has_voip);
+    }
+
+    /// A voip block whose size short is negative: `as usize` made it about
+    /// 2^64, and the "overlarge packet" skip loop then never ended (any
+    /// client could hang the server; the speex path runs with voip off).
+    #[test]
+    fn server_voip_negative_size_is_dropped() {
+        use crate::gen::maps::MapId;
+        use crate::kernel::sv::ServerCvars;
+        use crate::kernel::world::World;
+        let mut sv = Server::spawn(World::new(MapId::Arena), "arena", ServerCvars::default());
+        for size in [-1, -32768] {
+            let mut m = Msg::new(64);
+            m.write_byte(0); // generation
+            m.write_long(1); // sequence
+            m.write_byte(1); // frames
+            m.write_data(&[0xff; VOIP_TARGET_BYTES]);
+            m.write_byte(0); // flags
+            m.write_short(size);
+            m.begin_reading();
+            let start = std::time::Instant::now();
+            for ignore_data in [true, false] {
+                let mut r = Msg::from_bytes(&m.data[..m.cursize]);
+                r.begin_reading();
+                sv.user_voip(0, &mut r, ignore_data);
+            }
+            assert!(start.elapsed() < std::time::Duration::from_secs(1), "size {size}");
+        }
     }
 }
