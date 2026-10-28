@@ -161,8 +161,23 @@ pub fn link_target(b: &[u8]) -> Option<String> {
     }
     let n = u32::from_le_bytes(b[8..12].try_into().unwrap()) as usize;
     let t = std::str::from_utf8(b.get(12..12 + n)?).ok()?;
-    // a pack-relative path, never out of the pack
-    (!t.is_empty() && !t.contains("..") && !t.starts_with('/') && !t.contains(':')).then(|| t.to_string())
+    // a pack-relative path, never out of the pack: plain '/'-separated
+    // names only, so no "..", no absolute, drive or UNC (`\\host\share`,
+    // which Windows would open over the network) path
+    let plain = |s: &str| !s.is_empty() && s != "." && s != ".." && !s.contains(['\\', ':', '\0']);
+    t.split('/').all(plain).then(|| t.to_string())
+}
+
+/// Largest side a pack texture may have.
+pub const MAX_SIZE: usize = 16384;
+
+/// A header the pack could have written: a known format, a sane size and
+/// at most a full mip chain (a damaged or hostile file must not make
+/// `read` allocate gigabytes).
+fn header_ok(hd: &Header) -> bool {
+    let known = block_bytes(hd.fmt).is_some() || hd.fmt == 5; // 5: RGBA8
+    let full_chain = (usize::BITS - hd.w.max(hd.h).leading_zeros()) as usize;
+    known && (1..=MAX_SIZE).contains(&hd.w) && (1..=MAX_SIZE).contains(&hd.h) && (1..=full_chain).contains(&hd.mips)
 }
 
 /// Reads `rel` (a path in the pack at `root`), following one link, and
@@ -189,6 +204,9 @@ pub fn read(root: &Path, rel: &str, max_size: usize) -> Option<Texture> {
 /// A v1 / v2 file after its header.
 fn read_open(f: &mut std::fs::File, head: &[u8; HEADER], max_size: usize) -> Option<Texture> {
     let hd = Header::parse(head)?;
+    if !header_ok(&hd) {
+        return None;
+    }
     let sizes = level_sizes(hd.fmt, hd.w, hd.h, hd.mips);
     let skip = levels_to_skip(&hd, max_size);
     let (mut w, mut h) = (hd.w, hd.h);
@@ -213,6 +231,10 @@ fn read_open(f: &mut std::fs::File, head: &[u8; HEADER], max_size: usize) -> Opt
         let mut table = vec![0u8; 4 * n];
         f.read_exact(&mut table).ok()?;
         let csize: Vec<usize> = table.chunks(4).map(|c| u32::from_le_bytes(c.try_into().unwrap()) as usize).collect();
+        // zstd never grows a level by more than this (ZSTD_compressBound)
+        if csize.iter().zip(&sizes).any(|(&c, &s)| c > s + s / 128 + 1024) {
+            return None;
+        }
         f.seek(SeekFrom::Current(csize[..skip].iter().sum::<usize>() as i64)).ok()?;
         for i in skip..n {
             let mut c = vec![0u8; csize[i]];
@@ -294,6 +316,11 @@ mod tests {
         assert!(read(&d, "textures/loop.hdtex", 4096).is_none(), "a link to a link is not followed");
         assert_eq!(link_target(&link_bytes("../x")), None);
         assert_eq!(link_target(&link_bytes("C:/x")), None);
+        assert_eq!(link_target(&link_bytes("\\\\host\\share\\x.hdtex")), None);
+        assert_eq!(link_target(&link_bytes("textures\\..\\..\\x")), None);
+        assert_eq!(link_target(&link_bytes("/x")), None);
+        assert_eq!(link_target(&link_bytes("textures//x")), None);
+        assert_eq!(link_target(&link_bytes("textures/a.hdtex")).as_deref(), Some("textures/a.hdtex"));
         assert!(read(&d, "textures/missing.hdtex", 4096).is_none());
         let _ = std::fs::remove_dir_all(&d);
     }
@@ -304,5 +331,27 @@ mod tests {
         let mut short = v1(16, 16, FORMAT_DXT1, 5);
         short.pop();
         assert!(encode_v2(&short, 3).is_err());
+    }
+
+    #[test]
+    fn hostile_headers_are_refused_before_allocating() {
+        let d = tmp("hostile");
+        let file = |w, h, fmt, mips| Header { w, h, fmt, mips, alpha: false, mean: [0.0; 3] }.bytes(MAGIC_V1);
+        for (name, b) in [
+            ("mips", file(16, 16, FORMAT_DXT1, u32::MAX as usize)),
+            ("huge", file(u32::MAX as usize, u32::MAX as usize, 5, 1)),
+            ("zero", file(0, 16, FORMAT_DXT1, 1)),
+            ("fmt", file(16, 16, 99, 1)),
+        ] {
+            std::fs::write(d.join(format!("textures/{name}.hdtex")), &b).unwrap();
+            assert!(read(&d, &format!("textures/{name}.hdtex"), 4096).is_none(), "{name}");
+        }
+        // a v2 level table claiming a 4 GB compressed level
+        let mut b = Header { w: 16, h: 16, fmt: FORMAT_DXT1, mips: 1, alpha: false, mean: [0.0; 3] }.bytes(MAGIC_V2);
+        b.extend_from_slice(&1u32.to_le_bytes());
+        b.extend_from_slice(&u32::MAX.to_le_bytes());
+        std::fs::write(d.join("textures/csize.hdtex"), &b).unwrap();
+        assert!(read(&d, "textures/csize.hdtex", 4096).is_none());
+        let _ = std::fs::remove_dir_all(&d);
     }
 }
