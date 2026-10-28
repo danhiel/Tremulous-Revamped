@@ -22,7 +22,7 @@ fn bsp_from_pk3(path: &std::path::Path) -> Option<(String, Vec<u8>)> {
     let mut z = zip::ZipArchive::new(f).ok()?;
     for i in 0..z.len() {
         let mut e = z.by_index(i).ok()?;
-        let name = e.name().to_string();
+        let Ok(name) = e.name().map(|n| n.to_string()) else { continue };
         if name.starts_with("maps/") && name.ends_with(".bsp") {
             let mut v = Vec::new();
             e.read_to_end(&mut v).ok()?;

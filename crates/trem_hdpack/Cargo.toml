@@ -6,4 +6,4 @@ license.workspace = true
 description = "The 4K texture pack's file format (.hdtex / .hdnrm): lossless per-level zstd and duplicate links (dec055)"
 
 [dependencies]
-zstd = { version = "0.13", default-features = false }
+zstd = { version = "0.14", default-features = false }

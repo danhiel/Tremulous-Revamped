@@ -18,5 +18,5 @@ libc = "0.2"
 sheetty = { path = "../sheetty" }
 
 [dev-dependencies]
-zip = { version = "2", default-features = false, features = ["deflate"] }
+zip = { version = "9", default-features = false, features = ["deflate"] }
 sha2 = "0.10"
