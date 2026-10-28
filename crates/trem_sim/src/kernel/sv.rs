@@ -269,6 +269,11 @@ pub struct Challenge {
     pub connected: bool,
 }
 
+/// `MAX_BUCKETS`: the most addresses the rate limits track.
+const MAX_BUCKETS: usize = 16384;
+/// A bucket idle this long has drained at every burst / period used (10 x 1000).
+const BUCKET_IDLE_MSEC: i32 = 10 * 1000;
+
 /// `leakyBucket_t` (keyed by address instead of the C's hash chains).
 #[derive(Clone, Copy, Debug, Default)]
 struct Bucket {
@@ -978,6 +983,18 @@ impl Server {
             k_[..4].copy_from_slice(&from.ip);
             k_
         };
+        if self.buckets.len() >= MAX_BUCKETS && !self.buckets.contains_key(&key) {
+            // the C's table is fixed-size; a map keyed by (spoofable, and
+            // for ipv6 practically unlimited) source addresses must not
+            // grow without bound. A bucket idle longer than burst periods
+            // is drained (rate_limit would reset it), so dropping those
+            // changes nothing; still full means a flood: refuse new senders.
+            let now = now_ms();
+            self.buckets.retain(|_, b| now.wrapping_sub(b.last_time) <= BUCKET_IDLE_MSEC);
+            if self.buckets.len() >= MAX_BUCKETS {
+                return true;
+            }
+        }
         let b = self.buckets.entry(key).or_default();
         Self::rate_limit(b, burst, period)
     }
@@ -2426,4 +2443,34 @@ pub fn args_sanitize(s: &str) -> String {
 /// `trap_RealTime`.
 pub fn real_time() -> i32 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i32).unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::gen::maps::MapId;
+    use crate::kernel::world::World;
+
+    /// Spoofed sources (every packet a new ipv6 address) must not grow the
+    /// rate limit table without bound; a sender already tracked keeps its
+    /// own limit.
+    #[test]
+    fn rate_limit_table_is_bounded() {
+        let mut sv = Server::spawn(World::new(MapId::Arena), "arena", ServerCvars::default());
+        let me = NetAdr { kind: NetAdrType::Ip, ip: [192, 168, 1, 5], ..Default::default() };
+        assert!(!sv.rate_limit_address(&me, 10, 1000));
+        for i in 0..100_000u32 {
+            let mut ip6 = [0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+            ip6[12..].copy_from_slice(&i.to_be_bytes());
+            sv.rate_limit_address(&NetAdr { kind: NetAdrType::Ip6, ip6, ..Default::default() }, 10, 1000);
+        }
+        assert!(sv.buckets.len() <= MAX_BUCKETS, "{} buckets", sv.buckets.len());
+        // the tracked sender keeps its bucket: answered, then limited
+        // within one burst (the flood took about a second, so how much of
+        // the burst has leaked back depends on the machine)
+        let key = { let mut k = [0u8; 16]; k[..4].copy_from_slice(&me.ip); k };
+        assert!(sv.buckets.contains_key(&key));
+        assert!(!sv.rate_limit_address(&me, 10, 1000));
+        assert!((0..11).any(|_| sv.rate_limit_address(&me, 10, 1000)));
+    }
 }
