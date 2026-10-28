@@ -27,7 +27,7 @@ re/               original source, C reference harness, golden traces, evidence
 ## Play
 
 **Just play (Windows x64):** download `Tremulous-Revamped-win64.zip` from
-[Tremulous-Revamped-Release](https://github.com/MeepingsCorner/Tremulous-Revamped-Release/releases/latest),
+the [v1.0 release](https://github.com/danhiel/Tremulous-Revamped/releases/tag/v1.0),
 unzip it anywhere and run `Tremulous.exe`. For the 4K textures, also unzip
 both `tremulous-revamped-hd-textures-part*.zip` files from the
 [4K texture pack release](https://github.com/danhiel/Tremulous-Revamped/releases/tag/hd-textures-v1)
@@ -38,9 +38,9 @@ so an `hd` folder sits next to `Tremulous.exe`.
 
 1. Install Godot **4.7** (standard build).
 2. Open `godot/project.godot` and press Play (F5). Prebuilt libraries are in
-   `godot/bin/` for Linux x86_64 (`libtrem_godot.so`) and Windows x86_64
-   (`trem_godot.dll`, plus the FMOD / Steam Audio runtime DLLs). On macOS,
-   build the library yourself (see Build).
+   `godot/bin/` for Windows x86_64 (`trem_godot.dll`, plus the FMOD / Steam
+   Audio runtime DLLs). On Linux and macOS, build the library yourself (see
+   Build).
 3. The original start sequence runs: the `splash.RoQ` intro (any key skips
    it), then the main menu of `ui/main.menu` with its splash model and
    heartbeat loop. Play opens the server browser (LAN, Internet, Favorites;
