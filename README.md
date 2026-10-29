@@ -218,7 +218,7 @@ process; Create Server and `net_enabled 1` start a network server.
   group.
 * **Voice chat (VoIP)** (dec038, dec052, dec053, dec056): ioquake3's Opus
   voice chat, interoperable with original clients and servers (the bundled
-  libopus 1.1 of `re/source`, built by `crates/trem_opus`). K toggles the
+  libopus 1.6.1 in `third_party/opus`, built by `crates/trem_opus`). K toggles the
   microphone (`voip_toggle`); it turns itself off and says why when the
   server has no voice chat. A voice HUD at the left shows MIC ON / TALKING
   with the level, MIC OFF, and who is talking (`cl_voipHud`). Options →

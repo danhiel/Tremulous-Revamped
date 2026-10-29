@@ -2,10 +2,13 @@
 //! `CL_FirstSnapshot`'s `opus_encoder_create` / `opus_decoder_create`,
 //! cl_main.c `CL_CaptureVoip`'s `opus_encode`, cl_parse.c `CL_ParseVoip`'s
 //! `opus_decode` with packet-loss concealment, `OPUS_RESET_STATE`) over the
-//! bundled opus-1.1 that build.rs compiles. Owned handles free themselves
+//! libopus 1.6.1 (third_party/opus) that build.rs compiles (the reference
+//! tree bundles 1.1; the bitstream is the same RFC 6716 Opus, so voice still
+//! interoperates). Owned handles free themselves
 //! (`opus_encoder_destroy` / `opus_decoder_destroy` of `CL_Disconnect`).
 
-use std::os::raw::{c_int, c_uchar};
+use std::ffi::CStr;
+use std::os::raw::{c_char, c_int, c_uchar};
 
 #[repr(C)]
 struct OpusEncoderRaw {
@@ -25,6 +28,12 @@ extern "C" {
     fn opus_decode(st: *mut OpusDecoderRaw, data: *const c_uchar, len: i32, pcm: *mut i16, frame_size: c_int, decode_fec: c_int) -> c_int;
     fn opus_decoder_destroy(st: *mut OpusDecoderRaw);
     fn opus_decoder_ctl(st: *mut OpusDecoderRaw, request: c_int, ...) -> c_int;
+    fn opus_get_version_string() -> *const c_char;
+}
+
+/// `opus_get_version_string()`: "libopus 1.6.1".
+pub fn version() -> String {
+    unsafe { CStr::from_ptr(opus_get_version_string()) }.to_string_lossy().into_owned()
 }
 
 /// `OPUS_APPLICATION_VOIP`.
@@ -157,5 +166,42 @@ mod tests {
         assert_eq!(dec.decode(None, &mut pcm), n as i32);
         dec.reset();
         enc.reset();
+    }
+
+    /// The linked library is the vendored release, not an older copy.
+    #[test]
+    fn version_is_vendored_release() {
+        let v = version();
+        let want = include_str!("../../../third_party/opus/package_version");
+        let want = want.trim().trim_start_matches("PACKAGE_VERSION=").trim_matches('"');
+        assert_eq!(v, format!("libopus {want}"));
+    }
+
+    /// Hostile packets (random bytes, every TOC byte, truncations, oversize
+    /// frame counts) come back as a sample count or an opus error, never a
+    /// crash, and never more samples than the buffer holds.
+    #[test]
+    fn garbage_packets_are_rejected_or_decoded() {
+        let mut dec = Decoder::new(48000, 1).unwrap();
+        let mut pcm = vec![0i16; 2880];
+        let mut seed = 0x2545_f491_4f6c_dd1du64;
+        let mut rnd = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        for i in 0..20_000 {
+            let len = (rnd() % 1300) as usize;
+            let mut p: Vec<u8> = (0..len).map(|_| rnd() as u8).collect();
+            if !p.is_empty() {
+                p[0] = (i % 256) as u8;
+            }
+            let r = dec.decode(Some(&p), &mut pcm);
+            assert!(r <= pcm.len() as i32, "{r}");
+            if i % 97 == 0 {
+                dec.reset();
+            }
+        }
     }
 }

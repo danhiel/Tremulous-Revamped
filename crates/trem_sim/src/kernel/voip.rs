@@ -9,7 +9,7 @@
 //! half of server/sv_client.c (`SV_UpdateVoipIgnore`, `SV_Voip_f`,
 //! `SV_ShouldIgnoreVoipSender`, `SV_UserVoip`, `SV_FreeClient`'s queue),
 //! server/sv_snapshot.c (`SV_WriteVoipToClient`) and qcommon/common.c
-//! (`Com_IsVoipTarget`). The codec is the bundled libopus 1.1 (trem_opus).
+//! (`Com_IsVoipTarget`). The codec is libopus 1.6.1 (trem_opus).
 //!
 //! Sound I/O and cvars belong to the host (`VoipHost`: `S_StartCapture`,
 //! `S_AvailableCaptureSamples`, `S_Capture`, `S_StopCapture`,

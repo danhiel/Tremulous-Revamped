@@ -1,165 +1,79 @@
-//! Builds the bundled libopus 1.1 of the reference tree
-//! (re/source/src/opus-1.1) the way tremulous-legacy's Makefile does
-//! (USE_INTERNAL_OPUS: `OPUS_CFLAGS = -DOPUS_BUILD -DHAVE_LRINTF
-//! -DFLOATING_POINT -DUSE_ALLOCA` and the same object list), with the `cc`
-//! crate so it also cross-compiles (x86_64-pc-windows-gnu with mingw).
+//! Builds libopus 1.6.1 (third_party/opus, the xiph.org release tarball's
+//! sources) with the `cc` crate, so it also cross-compiles
+//! (x86_64-pc-windows-gnu with mingw). The file lists are upstream's own
+//! (`celt_sources.mk`, `silk_sources.mk`, `opus_sources.mk`), read here.
+//! Floating point, portable C only (no SIMD / run-time CPU detection), no
+//! neural features (DRED, OSCE, deep PLC: their `dnn/` is not vendored),
+//! hardening on: the defaults of upstream's CMake build, minus intrinsics.
 
-/// The Makefile's `$(B)/client/opus/*.o` list (src/, celt/, silk/, silk/float/).
-const SOURCES: &[&str] = &[
-    "silk/A2NLSF.c",
-    "silk/CNG.c",
-    "silk/HP_variable_cutoff.c",
-    "silk/LPC_analysis_filter.c",
-    "silk/float/LPC_analysis_filter_FLP.c",
-    "silk/LPC_inv_pred_gain.c",
-    "silk/float/LPC_inv_pred_gain_FLP.c",
-    "silk/LP_variable_cutoff.c",
-    "silk/float/LTP_analysis_filter_FLP.c",
-    "silk/float/LTP_scale_ctrl_FLP.c",
-    "silk/NLSF2A.c",
-    "silk/NLSF_VQ.c",
-    "silk/NLSF_VQ_weights_laroia.c",
-    "silk/NLSF_decode.c",
-    "silk/NLSF_del_dec_quant.c",
-    "silk/NLSF_encode.c",
-    "silk/NLSF_stabilize.c",
-    "silk/NLSF_unpack.c",
-    "silk/NSQ.c",
-    "silk/NSQ_del_dec.c",
-    "silk/PLC.c",
-    "silk/VAD.c",
-    "silk/VQ_WMat_EC.c",
-    "silk/ana_filt_bank_1.c",
-    "src/analysis.c",
-    "silk/float/apply_sine_window_FLP.c",
-    "silk/float/autocorrelation_FLP.c",
-    "celt/bands.c",
-    "silk/biquad_alt.c",
-    "silk/float/burg_modified_FLP.c",
-    "silk/bwexpander.c",
-    "silk/bwexpander_32.c",
-    "silk/float/bwexpander_FLP.c",
-    "celt/celt.c",
-    "celt/celt_decoder.c",
-    "celt/celt_encoder.c",
-    "celt/celt_lpc.c",
-    "silk/check_control_input.c",
-    "silk/code_signs.c",
-    "silk/control_SNR.c",
-    "silk/control_audio_bandwidth.c",
-    "silk/control_codec.c",
-    "silk/float/corrMatrix_FLP.c",
-    "celt/cwrs.c",
-    "silk/debug.c",
-    "silk/dec_API.c",
-    "silk/decode_core.c",
-    "silk/decode_frame.c",
-    "silk/decode_indices.c",
-    "silk/decode_parameters.c",
-    "silk/decode_pitch.c",
-    "silk/decode_pulses.c",
-    "silk/decoder_set_fs.c",
-    "silk/enc_API.c",
-    "silk/float/encode_frame_FLP.c",
-    "silk/encode_indices.c",
-    "silk/encode_pulses.c",
-    "silk/float/energy_FLP.c",
-    "celt/entcode.c",
-    "celt/entdec.c",
-    "celt/entenc.c",
-    "silk/float/find_LPC_FLP.c",
-    "silk/float/find_LTP_FLP.c",
-    "silk/float/find_pitch_lags_FLP.c",
-    "silk/float/find_pred_coefs_FLP.c",
-    "silk/gain_quant.c",
-    "silk/init_decoder.c",
-    "silk/init_encoder.c",
-    "silk/inner_prod_aligned.c",
-    "silk/float/inner_product_FLP.c",
-    "silk/interpolate.c",
-    "silk/float/k2a_FLP.c",
-    "celt/kiss_fft.c",
-    "celt/laplace.c",
-    "silk/float/levinsondurbin_FLP.c",
-    "silk/lin2log.c",
-    "silk/log2lin.c",
-    "celt/mathops.c",
-    "celt/mdct.c",
-    "src/mlp.c",
-    "src/mlp_data.c",
-    "celt/modes.c",
-    "silk/float/noise_shape_analysis_FLP.c",
-    "src/opus.c",
-    "src/opus_decoder.c",
-    "src/opus_encoder.c",
-    "src/opus_multistream.c",
-    "src/opus_multistream_decoder.c",
-    "src/opus_multistream_encoder.c",
-    "celt/pitch.c",
-    "silk/float/pitch_analysis_core_FLP.c",
-    "silk/pitch_est_tables.c",
-    "silk/float/prefilter_FLP.c",
-    "silk/process_NLSFs.c",
-    "silk/float/process_gains_FLP.c",
-    "silk/quant_LTP_gains.c",
-    "celt/quant_bands.c",
-    "celt/rate.c",
-    "silk/float/regularize_correlations_FLP.c",
-    "src/repacketizer.c",
-    "silk/resampler.c",
-    "silk/resampler_down2.c",
-    "silk/resampler_down2_3.c",
-    "silk/resampler_private_AR2.c",
-    "silk/resampler_private_IIR_FIR.c",
-    "silk/resampler_private_down_FIR.c",
-    "silk/resampler_private_up2_HQ.c",
-    "silk/resampler_rom.c",
-    "silk/float/residual_energy_FLP.c",
-    "silk/float/scale_copy_vector_FLP.c",
-    "silk/float/scale_vector_FLP.c",
-    "silk/float/schur_FLP.c",
-    "silk/shell_coder.c",
-    "silk/sigm_Q15.c",
-    "silk/float/solve_LS_FLP.c",
-    "silk/sort.c",
-    "silk/float/sort_FLP.c",
-    "silk/stereo_LR_to_MS.c",
-    "silk/stereo_MS_to_LR.c",
-    "silk/stereo_decode_pred.c",
-    "silk/stereo_encode_pred.c",
-    "silk/stereo_find_predictor.c",
-    "silk/stereo_quant_pred.c",
-    "silk/sum_sqr_shift.c",
-    "silk/table_LSF_cos.c",
-    "silk/tables_LTP.c",
-    "silk/tables_NLSF_CB_NB_MB.c",
-    "silk/tables_NLSF_CB_WB.c",
-    "silk/tables_gain.c",
-    "silk/tables_other.c",
-    "silk/tables_pitch_lag.c",
-    "silk/tables_pulses_per_block.c",
-    "celt/vq.c",
-    "silk/float/warped_autocorrelation_FLP.c",
-    "silk/float/wrappers_FLP.c",
+use std::path::Path;
+
+/// The variables of upstream's makefile fragments that a floating-point
+/// build without intrinsics or DNN compiles.
+const LISTS: &[(&str, &str)] = &[
+    ("celt_sources.mk", "CELT_SOURCES"),
+    ("silk_sources.mk", "SILK_SOURCES"),
+    ("silk_sources.mk", "SILK_SOURCES_FLOAT"),
+    ("opus_sources.mk", "OPUS_SOURCES"),
+    ("opus_sources.mk", "OPUS_SOURCES_FLOAT"),
 ];
+
+/// The files of `VAR = \` ... (backslash-continued lines) in a .mk file.
+fn mk_list(mk: &str, var: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut lines = mk.lines();
+    while let Some(l) = lines.next() {
+        let Some((name, rest)) = l.split_once('=') else { continue };
+        if name.trim() != var {
+            continue;
+        }
+        let mut cont = rest.trim_end().ends_with('\\');
+        out.extend(rest.split_whitespace().filter(|w| *w != "\\").map(str::to_owned));
+        while cont {
+            let Some(l) = lines.next() else { break };
+            cont = l.trim_end().ends_with('\\');
+            out.extend(l.split_whitespace().filter(|w| *w != "\\").map(str::to_owned));
+        }
+        return out;
+    }
+    panic!("{var} not found");
+}
 
 fn main() {
     let manifest = std::path::PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
-    let opus = manifest.join("../../re/source/src/opus-1.1");
+    // the workspace root, without ".." (it is cut from __FILE__ below)
+    let root = manifest.parent().and_then(Path::parent).unwrap().to_path_buf();
+    let opus = root.join("third_party").join("opus");
+    let version = std::fs::read_to_string(opus.join("package_version")).expect("third_party/opus/package_version");
+    let version = version.trim().trim_start_matches("PACKAGE_VERSION=").trim_matches('"');
     let mut b = cc::Build::new();
     b.warnings(false)
         .define("OPUS_BUILD", None)
         .define("HAVE_LRINTF", None)
         .define("FLOATING_POINT", None)
         .define("USE_ALLOCA", None)
+        .define("ENABLE_HARDENING", None)
+        .define("PACKAGE_VERSION", Some(format!("\"{version}\"").as_str()))
         .include(opus.join("include"))
         .include(opus.join("celt"))
         .include(opus.join("silk"))
         .include(opus.join("silk/float"))
+        .include(opus.join("src"))
         .flag_if_supported("-fno-fast-math")
         .opt_level(2);
-    for s in SOURCES {
-        b.file(opus.join(s));
+    // hardening reports failures with __FILE__: the paths relative to the
+    // workspace, not the build machine's folders (user names included)
+    if b.get_compiler().is_like_msvc() {
+        b.flag(format!("/d1trimfile:{}\\", root.display()));
+    } else {
+        b.flag_if_supported(format!("-ffile-prefix-map={}=.", root.display()));
+    }
+    for (file, var) in LISTS {
+        let mk = std::fs::read_to_string(opus.join(file)).unwrap_or_else(|e| panic!("{file}: {e}"));
+        for s in mk_list(&mk, var) {
+            assert!(Path::new(&s).is_relative() && !s.contains(".."), "{file}: {s}");
+            b.file(opus.join(&s));
+        }
     }
     b.compile("opus");
     println!("cargo::rerun-if-changed=build.rs");
