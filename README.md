@@ -27,7 +27,7 @@ re/               original source, C reference harness, golden traces, evidence
 ## Play
 
 **Just play (Windows x64):** download `Tremulous-Revamped-win64.zip` from
-the [v1.1 release](https://github.com/danhiel/Tremulous-Revamped/releases/tag/v1.1),
+the [v1.1.1 release](https://github.com/danhiel/Tremulous-Revamped/releases/tag/v1.1.1),
 unzip it anywhere and run `Tremulous.exe`. For the 4K textures, also unzip
 both `tremulous-revamped-hd-textures-part*.zip` files from the
 [4K texture pack release](https://github.com/danhiel/Tremulous-Revamped/releases/tag/hd-textures-v1)
