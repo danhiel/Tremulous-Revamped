@@ -123,7 +123,7 @@ static float IPLCALL game_falloff(IPLfloat32 d, void* unused) {
     if (d >= hi) return 0.0f;
     return (hi - d) / (hi - lo);
 }
-static void stop_pathing(void);
+static void stop_pathing(int cancel);
 
 /* tests: TREM_CRASH_LOG=<file> records access violations (first chance,
  * any thread, any module): the code, the faulting module + offset, and
@@ -550,7 +550,7 @@ __declspec(dllexport) void ta_shutdown(void) {
         WaitForSingleObject(S.thread, 2000);
         CloseHandle(S.thread);
     }
-    stop_pathing();
+    stop_pathing(1); /* quitting: do not wait out a bake */
     for (int i = 0; i < TA_VOICES; i++) {
         Voice* v = &S.v[i];
         if (v->ch) FMOD_Channel_Stop(v->ch);
@@ -756,10 +756,16 @@ static DWORD WINAPI bake_thread(LPVOID unused) {
     return 0;
 }
 
-static void stop_pathing(void) {
+/* `cancel` 0 lets a bake in progress run to its end (its probes are dropped):
+ * Steam Audio 4.8.1 crashes after iplPathBakerCancelBake, a thread of
+ * phonon.dll's own reading memory the cancel freed (a map change during
+ * transit's first bake: an access violation in phonon.dll, every time, with
+ * the scene, probes and bake parameters all kept alive). Waiting costs the
+ * rest of the bake once; the next visit loads the cached probes. */
+static void stop_pathing(int cancel) {
     if (S.bake_thread) {
         InterlockedExchange(&S.path_state, 0);
-        iplPathBakerCancelBake(S.ctx);
+        if (cancel) iplPathBakerCancelBake(S.ctx);
         WaitForSingleObject(S.bake_thread, INFINITE);
         CloseHandle(S.bake_thread);
         S.bake_thread = NULL;
@@ -811,7 +817,7 @@ __declspec(dllexport) int ta_set_scene(const float* verts, int nverts, const int
     IPLMaterial materials[TA_MATS];
     for (int i = 0; i < TA_MATS; i++) materials[i] = S.enhanced ? enhanced_mats[i % 8] : vanilla_mats[i / 8];
     if (!S.up) return 0;
-    stop_pathing(); /* the old scene's probes and any bake in progress */
+    stop_pathing(0); /* the old scene's probes and any bake in progress */
     EnterCriticalSection(&S.lock);
     InterlockedExchange(&S.have_scene, 0);
     if (S.mesh) {
