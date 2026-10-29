@@ -134,6 +134,38 @@ enum CurrentMap {
     Bsp(Vec<String>, String),
 }
 
+thread_local! {
+    /// TremGame's unhandled input, queued by TremInputRelay for `process`.
+    static PENDING_INPUT: std::cell::RefCell<std::collections::VecDeque<Gd<InputEvent>>> = std::cell::RefCell::new(std::collections::VecDeque::new());
+}
+
+/// TremGame's unhandled input, queued for its next `process`. Godot can
+/// deliver input while a TremGame method runs: on Windows, when the window
+/// loses focus during a call that pumps window messages (COM in the audio
+/// start, a dialog), `Input::release_pressed_events` flushes the buffered
+/// events then and there (display_server_windows.cpp, Godot 4.7.2).
+/// Delivered to TremGame itself, that bound it a second time and the game
+/// aborted ("Gd<T>::bind_mut() failed, already bound; T = TremGame", about
+/// one start in ten). The relay never touches the game.
+#[derive(GodotClass)]
+#[class(base=Node, init)]
+pub struct TremInputRelay {
+    base: Base<Node>,
+}
+
+#[godot_api]
+impl INode for TremInputRelay {
+    fn unhandled_input(&mut self, event: Gd<InputEvent>) {
+        PENDING_INPUT.with(|q| {
+            let mut q = q.borrow_mut();
+            // a game that stopped processing must not hoard them
+            if q.len() < 1024 {
+                q.push_back(event);
+            }
+        });
+    }
+}
+
 #[derive(GodotClass)]
 #[class(base=Node3D)]
 pub struct TremGame {
@@ -422,6 +454,11 @@ impl INode3D for TremGame {
     }
 
     fn ready(&mut self) {
+        // the input goes through a relay (see TremInputRelay); as a child
+        // it gets unhandled input just before this node would have
+        let mut relay = TremInputRelay::new_alloc();
+        relay.set_name("InputRelay");
+        self.base_mut().add_child(&relay);
         // the GPU's abilities (the graphics modes' global shader uniform
         // trem_gfx is declared in project.godot)
         let caps = crate::gfx::GpuCaps::detect();
@@ -505,6 +542,11 @@ impl INode3D for TremGame {
         if self.netext.dedicated {
             self.dedicated_process(delta); // wt-a (dec037)
             return;
+        }
+        // this frame's input (TremInputRelay), before anything else as when
+        // Godot delivered it to this node
+        while let Some(e) = PENDING_INPUT.with(|q| q.borrow_mut().pop_front()) {
+            self.handle_input(e);
         }
         let delta = self.wtb_frame(delta); // wt-b: CL_Frame's fixed avi frame time, VoIP idle
         self.firewall_frame(); // dec054: the startup check and its dialog
@@ -639,11 +681,15 @@ impl INode3D for TremGame {
         }
     }
 
+}
+
+impl TremGame {
     /// sdl_input.c's events into the client: `CL_KeyEvent` for keys and
     /// mouse buttons (the bound commands run at once), `CL_MouseEvent` for
     /// motion while the mouse is captured. The HUD (hud.gd) handles Escape
-    /// and the click that recaptures the mouse before this.
-    fn unhandled_input(&mut self, event: Gd<InputEvent>) {
+    /// and the click that recaptures the mouse before this. The events come
+    /// through `TremInputRelay`, first thing in `process`.
+    fn handle_input(&mut self, event: Gd<InputEvent>) {
         if let Ok(m) = event.clone().try_cast::<InputEventMouseMotion>() {
             if self.input_enabled && Input::singleton().get_mouse_mode() == MouseMode::CAPTURED {
                 let r = m.get_relative();
@@ -847,7 +893,10 @@ impl TremGame {
         }
         let children = self.base().get_children();
         for mut ch in children.iter_shared() {
-            ch.queue_free();
+            // the input relay stays for the whole run
+            if ch.clone().try_cast::<TremInputRelay>().is_err() {
+                ch.queue_free();
+            }
         }
         self.world = None;
         self.me = None;
@@ -1947,7 +1996,10 @@ impl TremGame {
     fn clear_scene(&mut self) {
         let children = self.base().get_children();
         for mut ch in children.iter_shared() {
-            ch.queue_free();
+            // the input relay stays for the whole run
+            if ch.clone().try_cast::<TremInputRelay>().is_err() {
+                ch.queue_free();
+            }
         }
         self.visuals.clear();
         self.float_sprites.clear();
@@ -4231,6 +4283,11 @@ impl TremGame {
 
     /// Windows' own dialog (DisplayServer.dialog_show) with the question;
     /// the answer comes back through a channel (no re-entry into TremGame).
+    /// Deferred: dialog_show is modal (TaskDialogIndirect runs its own
+    /// message loop until the player answers), and run from here it held
+    /// TremGame bound the whole time the window lost focus to the dialog,
+    /// when Godot flushes the buffered input (see TremInputRelay). From the
+    /// deferred-call queue no Rust object is bound.
     fn firewall_ask(&mut self, title: &str, text: &str) {
         let (tx, rx) = std::sync::mpsc::channel::<i64>();
         let cb = Callable::from_fn("firewall_choice", move |args: &[&Variant]| {
@@ -4238,10 +4295,8 @@ impl TremGame {
             let _ = tx.send(i);
         });
         let buttons: PackedStringArray = crate::firewall::PROMPT_BUTTONS.iter().map(|b| GString::from(*b)).collect();
-        let e = godot::classes::DisplayServer::singleton().dialog_show(title, text, &buttons, &cb);
-        if e == godot::global::Error::OK {
-            self.firewall_choice = Some(rx);
-        }
+        godot::classes::DisplayServer::singleton().call_deferred("dialog_show", &[GString::from(title).to_variant(), GString::from(text).to_variant(), buttons.to_variant(), cb.to_variant()]);
+        self.firewall_choice = Some(rx);
     }
 
     fn firewall_poll(&mut self) {
