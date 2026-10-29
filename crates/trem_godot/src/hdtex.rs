@@ -100,10 +100,10 @@ pub fn write(path: &Path, img: &Gd<Image>, mean: [f32; 3], alpha: bool) -> std::
     std::fs::write(path, bytes)
 }
 
-/// Read `rel` of the pack at `root` (TREMHD01 / 02 or a duplicate's
-/// link), skipping the mip levels larger than `max_size`.
-pub fn read(root: &Path, rel: &str, max_size: usize) -> Option<(Gd<Image>, [f32; 3])> {
-    let t = trem_hdpack::read(root, rel, max_size)?;
+/// A pack file read and decompressed (`trem_hdpack::read`: TREMHD01 / 02
+/// or a duplicate's link, the mip levels larger than `max_size` skipped)
+/// as an Image.
+fn to_image(t: trem_hdpack::Texture) -> Option<(Gd<Image>, [f32; 3])> {
     let fmt = ImageFormat::try_from_ord(t.header.fmt as i32)?;
     let img = Image::create_from_data(t.w as i32, t.h as i32, t.levels > 1, fmt, &PackedByteArray::from(t.data.as_slice()))?;
     Some((img, t.header.mean))
@@ -125,19 +125,77 @@ pub struct HdStore {
     map_gen: u32,
 }
 
+/// A key's files read and decompressed (any thread): its albedo, and its
+/// normal map when the albedo is there.
+struct Raw(Option<(trem_hdpack::Texture, Option<trem_hdpack::Texture>)>);
+
+fn read_raw(root: &Path, key: &str, max_size: usize) -> Raw {
+    Raw(trem_hdpack::read(root, &format!("{key}.hdtex"), max_size).map(|a| (a, trem_hdpack::read(root, &format!("{key}.hdnrm"), max_size))))
+}
+
+/// The textures of a `read_raw` (main thread: they go to the GPU).
+fn upload(raw: Raw) -> Option<HdTex> {
+    let (a, n) = raw.0?;
+    let (img, mean) = to_image(a)?;
+    let albedo = ImageTexture::create_from_image(&img)?;
+    let normal = n.and_then(to_image).and_then(|(n, _)| ImageTexture::create_from_image(&n));
+    Some(HdTex { albedo, normal, mean })
+}
+
+/// At most this many pack files read at once (each holds up to ~22 MB
+/// decompressed until it is uploaded).
+const MAX_READERS: usize = 8;
+
 impl HdStore {
     pub fn get(&mut self, key: &str) -> Option<HdTex> {
         if let Some((t, g)) = self.cache.get_mut(key) {
             *g = self.map_gen;
             return t.clone();
         }
-        let t = read(&self.root, &format!("{key}.hdtex"), self.max_size).and_then(|(img, mean)| {
-            let albedo = ImageTexture::create_from_image(&img)?;
-            let normal = read(&self.root, &format!("{key}.hdnrm"), self.max_size).and_then(|(n, _)| ImageTexture::create_from_image(&n));
-            Some(HdTex { albedo, normal, mean })
-        });
+        let t = upload(read_raw(&self.root, key, self.max_size));
         self.cache.insert(key.to_string(), (t.clone(), self.map_gen));
         t
+    }
+
+    /// Load `keys` not cached yet, as `get` would, their files read and
+    /// decompressed on worker threads (the zstd levels are most of a load)
+    /// while this thread uploads the finished ones. A bounded queue keeps
+    /// at most a few textures' data in memory. The number loaded.
+    fn prefetch(&mut self, keys: &[String]) -> usize {
+        let gen = self.map_gen;
+        let mut seen = std::collections::HashSet::new();
+        let mut todo: Vec<&str> = Vec::new();
+        for k in keys {
+            match self.cache.get_mut(k.as_str()) {
+                Some((_, g)) => *g = gen,
+                None if seen.insert(k.as_str()) => todo.push(k),
+                None => {}
+            }
+        }
+        if todo.is_empty() {
+            return 0;
+        }
+        let workers = std::thread::available_parallelism().map_or(4, |n| n.get()).clamp(1, MAX_READERS).min(todo.len());
+        let next = std::sync::atomic::AtomicUsize::new(0);
+        let (root, max_size, cache) = (&self.root, self.max_size, &mut self.cache);
+        let (tx, rx) = std::sync::mpsc::sync_channel::<(usize, Raw)>(workers);
+        std::thread::scope(|s| {
+            for _ in 0..workers {
+                let (tx, next, todo) = (tx.clone(), &next, &todo);
+                s.spawn(move || loop {
+                    let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    let Some(k) = todo.get(i) else { break };
+                    if tx.send((i, read_raw(root, k, max_size))).is_err() {
+                        break;
+                    }
+                });
+            }
+            drop(tx);
+            for (i, raw) in rx {
+                cache.insert(todo[i].to_string(), (upload(raw), gen));
+            }
+        });
+        todo.len()
     }
 
     /// A map starts loading: a texture the last map did not ask for, and
@@ -195,6 +253,16 @@ pub fn configure(enabled: bool, root: &str, max_size: usize) {
             *s = Some(HdStore { root, max_size: max_size.clamp(64, 8192), cache: HashMap::new(), map_gen: 0 });
         }
     });
+}
+
+/// Load the HD textures of `keys` in parallel (HdStore::prefetch), before
+/// the `get`s that ask for them one by one (bspview.rs: a map's surfaces).
+pub fn prefetch(keys: &[String]) {
+    let t0 = std::time::Instant::now();
+    let n = STORE.with(|s| s.borrow_mut().as_mut().map(|h| h.prefetch(keys)));
+    if let (Some(n @ 1..), true) = (n, std::env::var_os("TREM_HD_DEBUG").is_some()) {
+        godot_print!("trem: 4K pack: {n} of {} textures loaded in {} ms", keys.len(), t0.elapsed().as_millis());
+    }
 }
 
 /// The HD texture of an image key, when the pack has it.

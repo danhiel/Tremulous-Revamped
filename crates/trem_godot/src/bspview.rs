@@ -456,6 +456,9 @@ impl BspRender {
         }
         let mut keys: Vec<_> = batches.keys().copied().collect();
         keys.sort();
+        if crate::hdtex::active() {
+            self.prefetch_hd(bsp, &keys);
+        }
         let mut out = Vec::new();
         for key in keys {
             let (vs, is) = &batches[&key];
@@ -576,6 +579,36 @@ impl BspRender {
             out.push(mi);
         }
         out
+    }
+
+    /// The 4K pack's textures the materials of these batches will ask for
+    /// (base_material, stage_material), loaded at once in parallel
+    /// (hdtex::prefetch): the base image's, else the shader name's; each
+    /// single-image stage's.
+    fn prefetch_hd(&self, bsp: &Bsp, batches: &[(i32, i32)]) {
+        use crate::hdtex::key_of;
+        let mut first = Vec::new();
+        let mut bases = Vec::new();
+        for &(shader_num, lm) in batches {
+            let name = &bsp.shaders[shader_num as usize].name;
+            let lm_ok = lm >= 0 && (lm as usize) < self.lightmaps.len();
+            let Some(plan) = plan_passes(name, self.q3.get(&name.to_lowercase()), lm_ok) else { continue };
+            if let Some(b) = plan.base.as_ref().filter(|_| !self.tex_cache.contains_key(&shader_num)) {
+                first.push(key_of(&b.image));
+                bases.push((key_of(&b.image), key_of(name)));
+            }
+            for st in &plan.stages {
+                if let crate::q3shader::Source::Image(frames, _) = &st.source {
+                    if frames.len() == 1 {
+                        first.push(key_of(&frames[0]));
+                    }
+                }
+            }
+        }
+        crate::hdtex::prefetch(&first);
+        // the shader names of the base images the pack has not (cached now)
+        let fallback: Vec<String> = bases.into_iter().filter(|(img, _)| crate::hdtex::get(img).is_none()).map(|(_, name)| name).collect();
+        crate::hdtex::prefetch(&fallback);
     }
 
     /// The map's shader scripts (q3shader.rs).
@@ -944,7 +977,9 @@ fn autosprite2(vs: &mut [V], idx: &[u32]) {
 pub fn sky_textures_hd(bsp: &Bsp, pk3: &mut Pk3Set) -> Option<Vec<Gd<godot::classes::Texture2D>>> {
     let infos = pk3.shader_images();
     let env = bsp.shaders.iter().filter(|s| s.surface_flags & SURF_SKY != 0).find_map(|s| infos.get(&s.name.to_lowercase()).and_then(|i| i.sky.clone()))?;
-    ["rt", "lf", "bk", "ft", "up", "dn"].iter().map(|suf| crate::hdtex::get(&crate::hdtex::key_of(&format!("{env}_{suf}"))).map(|h| h.albedo.upcast::<godot::classes::Texture2D>())).collect()
+    let keys: Vec<String> = ["rt", "lf", "bk", "ft", "up", "dn"].iter().map(|suf| crate::hdtex::key_of(&format!("{env}_{suf}"))).collect();
+    crate::hdtex::prefetch(&keys);
+    keys.iter().map(|k| crate::hdtex::get(k).map(|h| h.albedo.upcast::<godot::classes::Texture2D>())).collect()
 }
 
 /// A map's sky (tr_sky.c): the box of `skyparms <env>` and the cloud
